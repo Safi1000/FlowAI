@@ -7,11 +7,31 @@ import { PlayCircle, Loader2 } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 
-type CrawlPage = { url: string; mode?: string; elements?: any };
+type CrawlPage = {
+  url: string;
+  mode?: string;
+  elements?: { intent?: string }[];
+  summary?: { links?: string[]; buttons?: string[]; forms?: number; inputs?: number; totalText?: number };
+  buttonsCount?: number;
+  linksCount?: number;
+  textLength?: number;
+  totalTextLength?: number;
+  error?: string;
+  diagnostic?: { rule?: string };
+  initialMode?: string;
+  aiVerifiedMode?: string | null;
+  finalMode?: string;
+  confidenceScore?: number;
+  aiConfidenceScore?: number;
+  reason?: string;
+  aiStatus?: "ok" | "error" | "skipped";
+  fallback?: boolean;
+};
 type CrawlResult = {
   startUrl: string;
   totalPages: number;
   staticCount: number;
+  hybridCount?: number;
   dynamicCount: number;
   results: CrawlPage[];
   error?: string;
@@ -162,17 +182,45 @@ export default function FlowGenerator() {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
                 <p>Website: <span className="font-medium break-all">{crawlResult.startUrl}</span></p>
                 <p>Total Pages Parsed: <span className="font-medium">{crawlResult.totalPages}</span></p>
-                <p>Static: <span className="font-medium">{crawlResult.staticCount}</span> | Dynamic: <span className="font-medium">{crawlResult.dynamicCount}</span></p>
+                <p>Static: <span className="font-medium">{crawlResult.staticCount}</span> | Hybrid: <span className="font-medium">{crawlResult.hybridCount ?? 0}</span> | Dynamic: <span className="font-medium">{crawlResult.dynamicCount}</span></p>
               </div>
-              <div className="space-y-2">
+              <div className="space-y-3">
                 <p className="text-sm font-medium">Sample Pages</p>
-                <div className="grid gap-2">
-                  {crawlResult.results.slice(0, 8).map((p, i) => (
-                    <div key={p.url + i} className="text-sm flex items-center justify-between">
-                      <span className="truncate max-w-[70%]">{new URL(p.url).pathname || "/"}</span>
-                      <span className="text-muted-foreground">{p.mode}</span>
-                    </div>
-                  ))}
+                <div className="grid gap-3">
+                  {crawlResult.results.slice(0, 10).map((p, i) => {
+                    const linkCount = typeof p.linksCount === "number" ? p.linksCount : (p.summary?.links?.length || 0);
+                    const buttonCount = typeof p.buttonsCount === "number" ? p.buttonsCount : (p.summary?.buttons?.length || 0);
+                    const textLen = typeof p.totalTextLength === "number" ? p.totalTextLength : (typeof p.textLength === "number" ? p.textLength : (p.summary?.totalText || 0));
+                    const intents = (p.elements || [])
+                      .map((e) => e.intent)
+                      .filter(Boolean) as string[];
+                    const intentMap = new Map<string, number>();
+                    for (const it of intents) intentMap.set(it, (intentMap.get(it) || 0) + 1);
+                    const topIntents = [...intentMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k]) => k);
+                    return (
+                      <div key={p.url + i} className="text-sm flex flex-col md:flex-row md:items-center md:justify-between gap-1 md:gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <Badge variant={(p.mode || p.finalMode) === "dynamic" ? "default" : "secondary"}>{p.mode || p.finalMode || "unknown"}</Badge>
+                          <span className="truncate max-w-[40ch] md:max-w-[60ch]">{new URL(p.url).pathname || "/"}</span>
+                        </div>
+                        {p.error ? (
+                          <div className="flex items-center gap-3 text-red-500">
+                            <span className="font-medium">Error:</span>
+                            <span className="truncate max-w-[50ch]" title={p.error}>{p.error}</span>
+                            {(p.mode || p.finalMode) && <span className="text-muted-foreground">(mode: {p.mode || p.finalMode})</span>}
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-3 text-muted-foreground">
+                            <span>Links: <span className="font-medium text-foreground">{linkCount}</span></span>
+                            <span>Buttons: <span className="font-medium text-foreground">{buttonCount}</span></span>
+                            <span>Text: <span className="font-medium text-foreground">{textLen}</span></span>
+                            {/* confidence and rule intentionally hidden in UI */}
+                            {/* hide AI status labels and intent badges */}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
                 <div className="pt-2">
                   <a
