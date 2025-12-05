@@ -15,7 +15,16 @@ npm install
 npx playwright install chromium
 ```
 
-3. Start the server
+3. Add environment variables in `backend/.env`
+
+```
+GROQ_API_KEY=your_groq_api_key
+# optional
+GROQ_MODEL=llama-3.1-8b-instant
+PORT=5000
+```
+
+4. Start the server
 
 ```
 npm run start
@@ -27,6 +36,13 @@ Server runs on http://localhost:5000
 
 ## API
 
+### Workflow pipeline
+- `POST /api/intelligent-crawl` — crawl site and extract structure.
+- `POST /api/detect-workflows` — derive nodes/edges/intents from crawl results.
+- `POST /api/generate-workflows` — build ordered workflows from detection output.
+- `POST /api/execute-workflows` — run workflows headlessly (Playwright) and return pass/fail.
+
+### Legacy
 POST /api/parse
 
 Request body:

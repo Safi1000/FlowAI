@@ -55,7 +55,7 @@ export async function crawlWebsiteIntelligent(startUrl, maxDepth = 3, maxPages =
           const aiStr = parsed.aiVerifiedMode ? parsed.aiVerifiedMode : (parsed.aiStatus === 'error' ? 'error' : 'skipped');
           const finalStr = parsed.finalMode || parsed.mode;
           const fb = parsed.fallback ? 'yes' : 'no';
-          console.log(`[FlowAI] Page: ${pathname}\nHeuristic: ${heuristicStr}\nGemini: ${aiStr}\nEngine: ${parsed.engineUsed || 'unknown'}\nFinal: ${finalStr}\nFallback: ${fb}`);
+          console.log(`[FlowAI] Page: ${pathname}\nHeuristic: ${heuristicStr}\nGroq: ${aiStr}\nEngine: ${parsed.engineUsed || 'unknown'}\nFinal: ${finalStr}\nFallback: ${fb}`);
         } catch {}
         if (parsed?.mode === "static" || parsed?.mode === "dynamic") {
           seenModes.add(parsed.mode);

@@ -5,6 +5,9 @@ import cors from "cors";
 import { crawlWebsiteIntelligent } from "./services/crawler.js";
 import { generateAdaptiveWorkflows } from "./services/adaptiveWorkflowGenerator.js";
 import { generateAIWorkflows } from "./services/aiWorkflowGenerator.js";
+import { detectWorkflowsFromCrawl } from "./services/workflowDetection.js";
+import { generateWorkflowsFromDetection } from "./services/workflowGeneration.js";
+import { executeWorkflows } from "./services/workflowExecution.js";
 
 const app = express();
 app.use(cors());
@@ -19,6 +22,45 @@ app.post("/api/intelligent-crawl", async (req, res) => {
   try {
     const result = await crawlWebsiteIntelligent(url, Number(maxDepth), Number(maxPages));
     res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
+app.post("/api/detect-workflows", async (req, res) => {
+  const { crawlData } = req.body || {};
+  if (!crawlData || !Array.isArray(crawlData?.results)) {
+    return res.status(400).json({ error: "Missing crawl results" });
+  }
+  try {
+    const detection = detectWorkflowsFromCrawl(crawlData);
+    res.json(detection);
+  } catch (err) {
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
+app.post("/api/generate-workflows", async (req, res) => {
+  const { detection } = req.body || {};
+  if (!detection || !Array.isArray(detection?.nodes) || !Array.isArray(detection?.edges)) {
+    return res.status(400).json({ error: "Missing detection data" });
+  }
+  try {
+    const generated = await generateWorkflowsFromDetection(detection);
+    res.json(generated);
+  } catch (err) {
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
+app.post("/api/execute-workflows", async (req, res) => {
+  const { workflows } = req.body || {};
+  if (!Array.isArray(workflows)) {
+    return res.status(400).json({ error: "Missing workflows" });
+  }
+  try {
+    const execResult = await executeWorkflows(workflows);
+    res.json(execResult);
   } catch (err) {
     res.status(500).json({ error: err?.message || String(err) });
   }

@@ -1,153 +1,93 @@
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-1.5-flash";
-const GEMINI_API_VERSION = process.env.GEMINI_API_VERSION || "v1";
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
+const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.1-8b-instant";
+const GROQ_API_URL = process.env.GROQ_API_URL || "https://api.groq.com/openai/v1/chat/completions";
 
-export const MODEL_PRIORITY = [
-  "models/gemini-2.5-pro",
-  "models/gemini-2.5-flash",
-  "models/gemini-2.0-flash-lite",
-];
-
-export async function callGemini(prompt, data = null) {
-  if (!GEMINI_API_KEY) {
-    throw new Error("GEMINI_API_KEY is not set");
+function buildMessages(prompt, data = null) {
+  if (!data) return [{ role: "user", content: prompt }];
+  let serialized = "";
+  try {
+    serialized = JSON.stringify(data);
+  } catch {
+    serialized = String(data);
   }
-  const parts = [{ text: prompt }];
-  if (data) {
-    try {
-      const text = JSON.stringify(data);
-      parts.push({ text: text.length > 15000 ? text.slice(0, 15000) : text });
-    } catch {
-      parts.push({ text: String(data).slice(0, 15000) });
-    }
+  if (serialized.length > 20000) serialized = serialized.slice(0, 20000);
+  return [
+    { role: "user", content: prompt },
+    { role: "user", content: `Context:\n${serialized}` },
+  ];
+}
+
+export async function callGroq(prompt, data = null) {
+  if (!GROQ_API_KEY) {
+    throw new Error("GROQ_API_KEY is not set");
   }
-
-  const body = {
-    contents: [
-      {
-        parts,
-      },
-    ],
-  };
-
-  const endpoint = `https://generativelanguage.googleapis.com/${GEMINI_API_VERSION}/models/${encodeURIComponent(
-    GEMINI_MODEL
-  )}:generateContent?key=${GEMINI_API_KEY}`;
-
-  let res = await fetch(endpoint, {
+  const res = await fetch(GROQ_API_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${GROQ_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: GROQ_MODEL,
+      messages: buildMessages(prompt, data),
+      temperature: 0.2,
+    }),
   });
 
-  // Fallback: if 404, retry with v1 and "-latest" model alias
-  if (res.status === 404) {
-    const altModel = GEMINI_MODEL.endsWith("-latest") ? GEMINI_MODEL : `${GEMINI_MODEL}-latest`;
-    const altEndpoint = `https://generativelanguage.googleapis.com/v1/models/${encodeURIComponent(altModel)}:generateContent?key=${GEMINI_API_KEY}`;
-    res = await fetch(altEndpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-  }
-
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Gemini API error: ${res.status} ${text}`);
+    let text = "";
+    try { text = await res.text(); } catch {}
+    throw new Error(`Groq API error: ${res.status} ${text}`);
   }
 
   const json = await res.json();
-  return json?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+  const message = json?.choices?.[0]?.message?.content;
+  if (!message || typeof message !== "string") {
+    throw new Error("Groq returned an invalid or empty response");
+  }
+  return message;
 }
 
-export async function callGeminiModel(model, prompt, data = null) {
-  const apiKey = process.env.GEMINI_API_KEY;
+export async function callGroqModel(model, prompt, data = null) {
+  const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
-    throw new Error("GEMINI_API_KEY is not defined in .env file");
-  }
-  const parts = [{ text: prompt }];
-  if (data) {
-    try {
-      const text = typeof data === "string" ? data : JSON.stringify(data);
-      parts.push({ text: text.length > 20000 ? text.slice(0, 20000) : text });
-    } catch {
-      parts.push({ text: String(data).slice(0, 20000) });
-    }
+    throw new Error("GROQ_API_KEY is not defined in .env file");
   }
 
-  const startModel = model || "models/gemini-2.5-pro";
-  const attempts = [startModel, ...MODEL_PRIORITY.filter((m) => m !== startModel)];
+  const chosenModel = model || GROQ_MODEL;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  try {
+    const res = await fetch(GROQ_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: chosenModel,
+        messages: buildMessages(prompt, data),
+        temperature: 0.1,
+      }),
+      signal: controller.signal,
+    });
 
-  const tryOnce = async (attemptModel) => {
-    const apiModel = String(attemptModel).replace(/^models\//, "");
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(apiModel)}:generateContent?key=${apiKey}`;
-    console.log(`[FlowAI Gemini] Attempting model: ${attemptModel}`);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
-    try {
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contents: [{ role: "user", parts }] }),
-        signal: controller.signal,
-      });
-      console.log(`[FlowAI Gemini] Response: ${res.status}`);
-      if (!res.ok) {
-        let bodyText = "";
-        try { bodyText = await res.text(); } catch {}
-        if (res.status === 401) {
-          console.error("[FlowAI Gemini Error] Invalid or expired API key. Check your .env configuration and restart the server.");
-          const err = new Error(`Gemini API error: ${res.status} ${bodyText}`);
-          err.name = "GeminiAuthError";
-          throw err;
-        }
-        if (res.status === 429 || /RESOURCE_EXHAUSTED/i.test(bodyText)) {
-          const retryAfter = Number(res.headers.get("retry-after")) || 0;
-          const waitMs = retryAfter > 0 ? retryAfter * 1000 : 5000;
-          console.warn(`[FlowAI Gemini] Response 429 — retrying with next model after ${waitMs}ms`);
-          const err = new Error("GeminiQuotaExceeded");
-          err.name = "GeminiQuotaExceeded";
-          err.waitMs = waitMs;
-          throw err;
-        }
-        const err = new Error(`Gemini API error: ${res.status} ${bodyText}`);
-        err.name = "GeminiApiError";
-        throw err;
-      }
-      const json = await res.json();
-      const text = json?.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!text || typeof text !== "string" || text.trim().length === 0) {
-        throw new Error("Gemini returned an invalid or empty response");
-      }
-      console.log(`[FlowAI Gemini] Using ${attemptModel} — Request OK (200)`);
-      console.log(`[FlowAI Gemini] Parsed decision: ${text.trim().toLowerCase().slice(0, 20)}`);
-      return text;
-    } finally {
-      clearTimeout(timeout);
+    if (!res.ok) {
+      let bodyText = "";
+      try { bodyText = await res.text(); } catch {}
+      const err = new Error(`Groq API error: ${res.status} ${bodyText}`);
+      err.name = res.status === 401 ? "GroqAuthError" : "GroqApiError";
+      throw err;
     }
-  };
 
-  let lastErr = null;
-  for (let i = 0; i < attempts.length; i++) {
-    const m = attempts[i];
-    try {
-      return await tryOnce(m);
-    } catch (e) {
-      lastErr = e;
-      if (e?.name === "GeminiQuotaExceeded") {
-        if (i < attempts.length - 1) {
-          console.warn(`[FlowAI Gemini Fallback] Switched from ${attempts[i]} to ${attempts[i + 1]} (due to quota)`);
-          const waitMs = Number(e?.waitMs) || 5000;
-          await new Promise((r) => setTimeout(r, waitMs));
-          continue;
-        }
-        break;
-      }
-      // Non-quota errors: do not switch models
-      break;
+    const json = await res.json();
+    const text = json?.choices?.[0]?.message?.content;
+    if (!text || typeof text !== "string" || text.trim().length === 0) {
+      throw new Error("Groq returned an invalid or empty response");
     }
+    return text;
+  } finally {
+    clearTimeout(timeout);
   }
-  throw new Error("All Gemini models exhausted");
 }
-
 

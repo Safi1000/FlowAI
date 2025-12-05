@@ -37,11 +37,26 @@ type CrawlResult = {
   error?: string;
 };
 
+type DetectionResult = {
+  totalPages: number;
+  totalEdges: number;
+  nodes: { id: string; url: string; title: string; mode: string; intents: { intent: string; count: number }[] }[];
+  edges: { from: string; to: string; intent: string; action: string; reason: string }[];
+};
+
+type GeneratedWorkflows = {
+  total: number;
+  workflows: { id: string; goal: string; steps: { page: string; action: string }[] }[];
+};
+
 export default function FlowGenerator() {
   const [url, setUrl] = useState("");
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [crawlResult, setCrawlResult] = useState<CrawlResult | null>(null);
+  const [detection, setDetection] = useState<DetectionResult | null>(null);
+  const [generated, setGenerated] = useState<GeneratedWorkflows | null>(null);
+  const [pipelineStep, setPipelineStep] = useState<string | null>(null);
   const [intelLoading, setIntelLoading] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -53,6 +68,9 @@ export default function FlowGenerator() {
     setProgress(0);
     setError(null);
     setCrawlResult(null);
+    setDetection(null);
+    setGenerated(null);
+    setPipelineStep("crawl");
     try {
       const ctrl = new AbortController();
       abortRef.current = ctrl;
@@ -75,6 +93,34 @@ export default function FlowGenerator() {
       } else {
         setCrawlResult(data);
         try { localStorage.setItem("flowai:lastCrawl", JSON.stringify(data)); } catch {}
+        // Chain detection -> generation
+        setPipelineStep("detect");
+        const detectResp = await fetch("/api/detect-workflows", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ crawlData: data }),
+          signal: ctrl.signal,
+        });
+        const detectData = await detectResp.json();
+        if (!detectResp.ok || detectData?.error) {
+          throw new Error(detectData?.error || `Detection failed (${detectResp.status})`);
+        }
+        setDetection(detectData);
+
+        setPipelineStep("generate");
+        const genResp = await fetch("/api/generate-workflows", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ detection: detectData }),
+          signal: ctrl.signal,
+        });
+        const genData = await genResp.json();
+        if (!genResp.ok || genData?.error) {
+          throw new Error(genData?.error || `Generation failed (${genResp.status})`);
+        }
+        setGenerated(genData);
+        try { localStorage.setItem("flowai:lastGeneratedWorkflows", JSON.stringify(genData)); } catch {}
+        setPipelineStep(null);
       }
     } catch (e: any) {
       if (e?.name === "AbortError") setError("Operation cancelled.");
@@ -238,7 +284,36 @@ export default function FlowGenerator() {
           </Card>
         )}
 
-        {/* Placeholder results section removed */}
+        {/* Detection & Generation Summary */}
+        {(detection || generated) && (
+          <Card className="shadow-elegant border-border animate-fade-in-up">
+            <CardHeader>
+              <CardTitle>Workflow Pipeline</CardTitle>
+              <CardDescription>Detect → Generate → Execute</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+                <div className="border rounded-lg p-3">
+                  <p className="font-medium">Detection</p>
+                  <p className="text-muted-foreground">Nodes: {detection?.totalPages ?? 0}</p>
+                  <p className="text-muted-foreground">Edges: {detection?.totalEdges ?? 0}</p>
+                  {pipelineStep === "detect" && <p className="text-xs text-primary">Running...</p>}
+                </div>
+                <div className="border rounded-lg p-3">
+                  <p className="font-medium">Generation</p>
+                  <p className="text-muted-foreground">Workflows: {generated?.total ?? 0}</p>
+                  {pipelineStep === "generate" && <p className="text-xs text-primary">Running...</p>}
+                </div>
+                <div className="border rounded-lg p-3">
+                  <p className="font-medium">Execution</p>
+                  <p className="text-muted-foreground">
+                    Execute workflows on the Workflows page
+                  </p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Empty State */}
         {!intelLoading && !crawlResult && (

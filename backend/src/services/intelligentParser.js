@@ -1,19 +1,19 @@
 import { chromium } from "playwright";
 import axios from "axios";
 import * as cheerio from "cheerio";
-import { callGeminiModel } from "./aiClient.js";
+import { callGroqModel } from "./aiClient.js";
 
-const geminiDecisionCache = new Map();
-let geminiCallsInFlight = 0;
-const maxGeminiConcurrency = Number(process.env.GEMINI_MAX_CONCURRENCY || 3);
+const groqDecisionCache = new Map();
+let groqCallsInFlight = 0;
+const maxGroqConcurrency = Number(process.env.GROQ_MAX_CONCURRENCY || 3);
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-async function withGeminiLimit(fn) {
-  while (geminiCallsInFlight >= maxGeminiConcurrency) await wait(50);
-  geminiCallsInFlight += 1;
+async function withGroqLimit(fn) {
+  while (groqCallsInFlight >= maxGroqConcurrency) await wait(50);
+  groqCallsInFlight += 1;
   try {
     return await fn();
   } finally {
-    geminiCallsInFlight -= 1;
+    groqCallsInFlight -= 1;
   }
 }
 function hashString(s) {
@@ -207,8 +207,8 @@ export async function intelligentParse(url, { browser, domainSeenModes } = {}) {
     const signature = `${host}|${hashString(htmlSnippet)}|${scriptCountStatic}|${Math.min(9, Math.floor(staticTextLength / 500))}`;
     const domainHasMixed = !!(domainSeenModes && domainSeenModes.has("static") && domainSeenModes.has("dynamic"));
     if (confidenceScore < 0.6 && domainHasMixed) {
-      if (geminiDecisionCache.has(signature)) {
-        aiVerifiedMode = geminiDecisionCache.get(signature);
+      if (groqDecisionCache.has(signature)) {
+        aiVerifiedMode = groqDecisionCache.get(signature);
         if (aiVerifiedMode) finalMode = aiVerifiedMode;
         reason = "ai-cache";
         aiStatus = "ok";
@@ -222,30 +222,25 @@ export async function intelligentParse(url, { browser, domainSeenModes } = {}) {
             staticTextLength,
             heuristic: { initialMode, rule, confidenceScore },
           };
-          const aiText = await withGeminiLimit(() => callGeminiModel("models/gemini-2.5-pro", prompt, data));
+          const aiText = await withGroqLimit(() => callGroqModel("llama-3.1-8b-instant", prompt, data));
           const v = (aiText || "").trim().toLowerCase();
           if (v.startsWith("static")) {
             aiVerifiedMode = "static";
           } else if (v.startsWith("dynamic")) {
             aiVerifiedMode = "dynamic";
           }
-          console.log(`[FlowAI Gemini] Parsed decision: ${aiVerifiedMode || "unknown"}`);
+          console.log(`[FlowAI Groq] Parsed decision: ${aiVerifiedMode || "unknown"}`);
           if (!aiVerifiedMode) {
-            throw new Error("Gemini returned an invalid or empty response for " + url);
+            throw new Error("Groq returned an invalid or empty response for " + url);
           }
           if (aiVerifiedMode) {
-            geminiDecisionCache.set(signature, aiVerifiedMode);
+            groqDecisionCache.set(signature, aiVerifiedMode);
             finalMode = aiVerifiedMode;
             reason = "ai";
             aiStatus = "ok";
           }
         } catch (e) {
-          if ((e?.message || "").includes("All Gemini models exhausted")) {
-            console.error(`[FlowAI Gemini Error] All Gemini models exhausted — using heuristic fallback for ${url}`);
-            aiErrorDetail = "All Gemini models exceeded quota";
-          } else {
-            console.error(`[FlowAI Gemini Error] API failed for ${url} — using heuristic only.`, e?.message || e);
-          }
+          console.error(`[FlowAI Groq Error] API failed for ${url} — using heuristic only.`, e?.message || e);
           // Fallback to heuristic decision on AI failure
           reason = "rule-fallback";
           aiVerifiedMode = null;

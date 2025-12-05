@@ -1,4 +1,4 @@
-import { callGemini } from "./aiClient.js";
+import { callGroq } from "./aiClient.js";
 
 export async function generateAIWorkflows(parsedSiteData) {
   const prompt = `
@@ -10,7 +10,7 @@ ordered steps (page URL + action intent), and logical transitions.\n
 Return strict JSON: {"workflows":[{"goal":"...","steps":[{"page":"...","action":"..."}]}]}. No prose.
 `;
 
-  const response = await callGemini(prompt, parsedSiteData);
+  const response = await callGroq(prompt, parsedSiteData);
   try {
     const parsed = JSON.parse(response);
     if (parsed && Array.isArray(parsed.workflows)) return parsed;
