@@ -9,6 +9,9 @@ import FlowGenerator from "./pages/FlowGenerator";
 import Settings from "./pages/Settings";
 import NotFound from "./pages/NotFound";
 import Workflows from "./pages/Workflows";
+import LinkTesting from "./pages/LinkTesting";
+import ResponsiveTesting from "./pages/ResponsiveTesting";
+import PerformanceTesting from "./pages/PerformanceTesting";
 import SelfHealing from "./pages/SelfHealing";
 import BugPrioritization from "./pages/BugPrioritization";
 import Reports from "./pages/Reports";
@@ -26,6 +29,9 @@ const App = () => (
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/generator" element={<FlowGenerator />} />
           <Route path="/workflows" element={<Workflows />} />
+          <Route path="/links" element={<LinkTesting />} />
+          <Route path="/responsive" element={<ResponsiveTesting />} />
+          <Route path="/performance" element={<PerformanceTesting />} />
           <Route path="/healing" element={<SelfHealing />} />
           <Route path="/bugs" element={<BugPrioritization />} />
           <Route path="/reports" element={<Reports />} />

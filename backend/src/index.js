@@ -2,16 +2,20 @@ import "dotenv/config";
 import express from "express";
 import bodyParser from "body-parser";
 import cors from "cors";
+import path from "path";
 import { crawlWebsiteIntelligent } from "./services/crawler.js";
-import { generateAdaptiveWorkflows } from "./services/adaptiveWorkflowGenerator.js";
-import { generateAIWorkflows } from "./services/aiWorkflowGenerator.js";
-import { detectWorkflowsFromCrawl } from "./services/workflowDetection.js";
-import { generateWorkflowsFromDetection } from "./services/workflowGeneration.js";
-import { executeWorkflows } from "./services/workflowExecution.js";
+import { detectFormsFromCrawl } from "./services/workflowDetection.js";
+import { testForms } from "./services/formTester.js";
+import { testLinks } from "./services/linkTester.js";
+import { testResponsive, getScreenshots, clearScreenshots } from "./services/responsiveTester.js";
+import { testPerformance } from "./services/performanceTester.js";
 
 const app = express();
 app.use(cors());
 app.use(bodyParser.json({ limit: "5mb" }));
+
+// Serve screenshots as static files
+app.use("/screenshots", express.static(path.join(process.cwd(), "screenshots")));
 
 
 app.post("/api/intelligent-crawl", async (req, res) => {
@@ -27,70 +31,93 @@ app.post("/api/intelligent-crawl", async (req, res) => {
   }
 });
 
-app.post("/api/detect-workflows", async (req, res) => {
+app.post("/api/detect-forms", async (req, res) => {
   const { crawlData } = req.body || {};
   if (!crawlData || !Array.isArray(crawlData?.results)) {
     return res.status(400).json({ error: "Missing crawl results" });
   }
   try {
-    const detection = detectWorkflowsFromCrawl(crawlData);
+    const detection = detectFormsFromCrawl(crawlData);
     res.json(detection);
   } catch (err) {
     res.status(500).json({ error: err?.message || String(err) });
   }
 });
 
-app.post("/api/generate-workflows", async (req, res) => {
-  const { detection } = req.body || {};
-  if (!detection || !Array.isArray(detection?.nodes) || !Array.isArray(detection?.edges)) {
-    return res.status(400).json({ error: "Missing detection data" });
+app.post("/api/test-forms", async (req, res) => {
+  const { formPages } = req.body || {};
+  if (!Array.isArray(formPages)) {
+    return res.status(400).json({ error: "Missing formPages array" });
   }
   try {
-    const generated = await generateWorkflowsFromDetection(detection);
-    res.json(generated);
+    const results = await testForms(formPages);
+    res.json(results);
   } catch (err) {
     res.status(500).json({ error: err?.message || String(err) });
   }
 });
 
-app.post("/api/execute-workflows", async (req, res) => {
-  const { workflows } = req.body || {};
-  if (!Array.isArray(workflows)) {
-    return res.status(400).json({ error: "Missing workflows" });
-  }
-  try {
-    const execResult = await executeWorkflows(workflows);
-    res.json(execResult);
-  } catch (err) {
-    res.status(500).json({ error: err?.message || String(err) });
-  }
-});
-
-app.post("/api/adaptive-workflows", async (req, res) => {
-  const { crawlData } = req.body || {};
+app.post("/api/test-links", async (req, res) => {
+  const { crawlData, testExternal = false, maxLinks = 100 } = req.body || {};
   if (!crawlData || !Array.isArray(crawlData?.results)) {
     return res.status(400).json({ error: "Missing crawl results" });
   }
   try {
-    const wf = generateAdaptiveWorkflows(crawlData);
-    res.json(wf);
+    const results = await testLinks(crawlData, { testExternal, maxLinks });
+    res.json(results);
   } catch (err) {
     res.status(500).json({ error: err?.message || String(err) });
   }
 });
 
-app.post("/api/ai-workflows", async (req, res) => {
+app.post("/api/test-responsive", async (req, res) => {
+  const { urls } = req.body || {};
+  if (!Array.isArray(urls) || urls.length === 0) {
+    return res.status(400).json({ error: "Missing urls array" });
+  }
   try {
-    const data = await generateAIWorkflows(req.body);
-    res.json(data);
+    const results = await testResponsive(urls);
+    res.json(results);
   } catch (err) {
     res.status(500).json({ error: err?.message || String(err) });
   }
 });
 
-const PORT = process.env.PORT || 5000;
+app.get("/api/screenshots", (req, res) => {
+  try {
+    const screenshots = getScreenshots();
+    res.json({ screenshots });
+  } catch (err) {
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
+app.delete("/api/screenshots", (req, res) => {
+  try {
+    const result = clearScreenshots();
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
+app.post("/api/test-performance", async (req, res) => {
+  const { urls } = req.body || {};
+  if (!Array.isArray(urls) || urls.length === 0) {
+    return res.status(400).json({ error: "Missing urls array" });
+  }
+  try {
+    const results = await testPerformance(urls);
+    res.json(results);
+  } catch (err) {
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
+const PORT = process.env.PORT || 5001;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
 
 

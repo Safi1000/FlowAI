@@ -10,7 +10,10 @@ import {
   Settings,
   Bell,
   Search,
-  User
+  User,
+  Link2,
+  Monitor,
+  Zap
 } from "lucide-react";
 import { Logo } from "@/components/Logo";
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -31,8 +34,11 @@ interface DashboardLayoutProps {
 
 const navigation = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  { name: "Workflows", href: "/workflows", icon: Workflow },
-  { name: "Flow Generator", href: "/generator", icon: PlayCircle },
+  { name: "Crawl & Detect", href: "/generator", icon: PlayCircle },
+  { name: "Form Testing", href: "/workflows", icon: Workflow },
+  { name: "Link Testing", href: "/links", icon: Link2 },
+  { name: "Responsive", href: "/responsive", icon: Monitor },
+  { name: "Performance", href: "/performance", icon: Zap },
   { name: "Self-Healing", href: "/healing", icon: Wrench },
   { name: "Bug Priority", href: "/bugs", icon: Bug },
   { name: "Reports", href: "/reports", icon: BarChart3 },
