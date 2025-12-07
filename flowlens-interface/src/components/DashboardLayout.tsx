@@ -1,19 +1,15 @@
 import { ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { 
-  LayoutDashboard, 
-  Workflow, 
-  PlayCircle, 
-  Wrench, 
-  Bug, 
-  BarChart3, 
+import {
+  LayoutDashboard,
+  PlayCircle,
+  Wrench,
+  Bug,
+  BarChart3,
   Settings,
   Bell,
   Search,
   User,
-  Link2,
-  Monitor,
-  Zap
 } from "lucide-react";
 import { Logo } from "@/components/Logo";
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -35,10 +31,6 @@ interface DashboardLayoutProps {
 const navigation = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { name: "Crawl & Detect", href: "/generator", icon: PlayCircle },
-  { name: "Form Testing", href: "/workflows", icon: Workflow },
-  { name: "Link Testing", href: "/links", icon: Link2 },
-  { name: "Responsive", href: "/responsive", icon: Monitor },
-  { name: "Performance", href: "/performance", icon: Zap },
   { name: "Self-Healing", href: "/healing", icon: Wrench },
   { name: "Bug Priority", href: "/bugs", icon: Bug },
   { name: "Reports", href: "/reports", icon: BarChart3 },
