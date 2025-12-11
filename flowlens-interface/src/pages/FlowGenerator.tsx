@@ -2,19 +2,22 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   PlayCircle,
   Loader2,
-  FileText,
   CheckCircle,
   XCircle,
   AlertTriangle,
+  AlertCircle,
   Monitor,
-  Globe,
   Zap,
   Link2,
   Smartphone,
   Tablet,
   ChevronDown,
-  ChevronUp,
   Image as ImageIcon,
+  Eye,
+  Settings2,
+  Sparkles,
+  ListChecks,
+  Play,
 } from "lucide-react";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { Button } from "@/components/ui/button";
@@ -35,6 +38,15 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
 
 // Shared crawl types
  type CrawlPage = {
@@ -170,14 +182,14 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 };
 
 // Form test types
- type FormTestResult = {
+type FormTestResult = {
   url: string;
   title: string;
   status: "passed" | "failed" | "inconclusive" | "error" | "pending";
   filledFields?: { selector: string; value: string; description?: string }[];
   submitClicked?: boolean;
   aiPlan?: { fillActions: { selector: string; value: string; description: string }[]; submitSelector: string };
-  aiAnalysis?: { status: string; confidence: number; reason: string; detectedMessages: string[] };
+  aiAnalysis?: { status: string; confidence: number; reason: string };
   error?: string;
 };
 
@@ -188,6 +200,72 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
   inconclusive: FormTestResult[];
   errors: FormTestResult[];
   passRate: number;
+};
+
+// Form plan preview types
+type FormPlanResponse = {
+  url: string;
+  title: string;
+  formData: {
+    inputs: { selector: string; type: string; label?: string; name?: string; placeholder?: string }[];
+    buttons: { selector: string; text: string; type?: string }[];
+  };
+  aiPlan: {
+    fillActions: { selector: string; value: string; description: string }[];
+    submitSelector: string;
+    submitDescription?: string;
+  };
+};
+
+type EditableFillAction = {
+  selector: string;
+  value: string;
+  description: string;
+  skip: boolean;
+  inputType: string;
+};
+
+type WorkflowStep = {
+  index?: number;
+  action: string;
+  selector?: string;
+  value?: string;
+  description?: string;
+  url?: string;
+  title?: string;
+  status?: string;
+  error?: string | null;
+};
+
+// New intelligent workflow detection types
+type DetectedWorkflow = {
+  id: string;
+  type: string;
+  name: string;
+  description: string;
+  available: boolean;
+  confidence: number;
+  reason: string;
+  pageUrl: string | null;
+  pageTitle: string | null;
+  fields?: string[]; // Field names for display
+  steps: WorkflowStep[];
+};
+
+type WorkflowDiscoveryResponse = {
+  url: string;
+  detectedWorkflows: DetectedWorkflow[];
+  pagesScanned: number;
+  summary: string;
+  error?: string;
+};
+
+type WorkflowExecutionResult = {
+  status: "passed" | "failed" | "inconclusive";
+  reason?: string;
+  confidence?: number;
+  error?: string | null;
+  steps: WorkflowStep[];
 };
 
 const API_BASE = (import.meta.env.VITE_API_BASE || "/api").replace(/\/$/, "");
@@ -231,6 +309,25 @@ export default function FlowGenerator() {
   const [formTestingUrl, setFormTestingUrl] = useState<string | null>(null);
   const [formTestResults, setFormTestResults] = useState<Map<string, FormTestResult>>(new Map());
 
+  // Plan preview state
+  const [showPlanPreview, setShowPlanPreview] = useState(false);
+  const [planLoading, setPlanLoading] = useState(false);
+  const [previewPlan, setPreviewPlan] = useState<FormPlanResponse | null>(null);
+  const [editablePlan, setEditablePlan] = useState<EditableFillAction[]>([]);
+  const [skipSubmit, setSkipSubmit] = useState(false);
+  const [previewFormPage, setPreviewFormPage] = useState<FormPage | null>(null);
+
+  // Workflow detection/execution (new intelligent system)
+  const [workflowLoading, setWorkflowLoading] = useState(false);
+  const [workflowError, setWorkflowError] = useState<string | null>(null);
+  const [detectedWorkflows, setDetectedWorkflows] = useState<DetectedWorkflow[]>([]);
+  const [pagesScanned, setPagesScanned] = useState(0);
+  const [selectedWorkflow, setSelectedWorkflow] = useState<DetectedWorkflow | null>(null);
+  const [showWorkflowPreview, setShowWorkflowPreview] = useState(false);
+  const [editableSteps, setEditableSteps] = useState<(WorkflowStep & { skip?: boolean })[]>([]);
+  const [workflowRunResult, setWorkflowRunResult] = useState<WorkflowExecutionResult | null>(null);
+  const [workflowRunLoading, setWorkflowRunLoading] = useState(false);
+
   const abortRef = useRef<AbortController | null>(null);
 
   // Load previous crawl + detection from storage
@@ -257,6 +354,14 @@ export default function FlowGenerator() {
       }
     } catch {}
   }, []);
+
+  // Reset workflow preview when detected workflows change
+  useEffect(() => {
+    if (detectedWorkflows.length === 0) {
+      setSelectedWorkflow(null);
+      setShowWorkflowPreview(false);
+    }
+  }, [detectedWorkflows]);
 
   const handleIntelligentCrawl = async () => {
     if (!url) return;
@@ -343,6 +448,143 @@ export default function FlowGenerator() {
       abortRef.current?.abort();
     } catch {}
     setIntelLoading(false);
+  };
+
+  // New intelligent workflow discovery (site-wide)
+  const handleDiscoverWorkflows = async () => {
+    if (!url) return;
+    setWorkflowLoading(true);
+    setWorkflowError(null);
+    setDetectedWorkflows([]);
+    setPagesScanned(0);
+    setSelectedWorkflow(null);
+    setWorkflowRunResult(null);
+    setShowWorkflowPreview(false);
+    
+    try {
+      const resp = await fetch(`${API_BASE}/discover-workflows`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+      const data = (await resp.json()) as WorkflowDiscoveryResponse;
+      if (!resp.ok || data.error) {
+        throw new Error(data.error || `Discovery failed (${resp.status})`);
+      }
+      setDetectedWorkflows(data.detectedWorkflows || []);
+      setPagesScanned(data.pagesScanned || 0);
+    } catch (err) {
+      const e = err as Error;
+      setWorkflowError(e.message || "Workflow discovery failed");
+    } finally {
+      setWorkflowLoading(false);
+    }
+  };
+
+  const handlePreviewWorkflow = (workflow: DetectedWorkflow) => {
+    setSelectedWorkflow(workflow);
+    // Initialize editable steps with skip property
+    setEditableSteps(workflow.steps.map(step => ({ ...step, skip: false })));
+    setShowWorkflowPreview(true);
+    setWorkflowRunResult(null);
+  };
+
+  const updateEditableStep = (idx: number, field: string, value: string | boolean) => {
+    setEditableSteps(prev => prev.map((step, i) => 
+      i === idx ? { ...step, [field]: value } : step
+    ));
+  };
+
+  const handleExecuteWorkflow = async (workflow: DetectedWorkflow) => {
+    if (!url || !workflow.steps || workflow.steps.length === 0) return;
+    setWorkflowRunLoading(true);
+    setWorkflowError(null);
+    setWorkflowRunResult(null);
+    setSelectedWorkflow(workflow);
+    
+    try {
+      const resp = await fetch(`${API_BASE}/execute-workflow`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        // Pass pageUrl so workflow executes on the correct page
+        body: JSON.stringify({ url, pageUrl: workflow.pageUrl, steps: workflow.steps }),
+      });
+      const data = (await resp.json()) as WorkflowExecutionResult & { error?: string };
+      if (!resp.ok || data.error) {
+        throw new Error(data.error || `Execution failed (${resp.status})`);
+      }
+      setWorkflowRunResult(data);
+    } catch (err) {
+      const e = err as Error;
+      setWorkflowError(e.message || "Workflow execution failed");
+    } finally {
+      setWorkflowRunLoading(false);
+    }
+  };
+
+  // Execute workflow with edited steps
+  const handleExecuteEditedWorkflow = async () => {
+    if (!url || !selectedWorkflow || editableSteps.length === 0) return;
+    
+    // Filter out skipped steps
+    const stepsToRun = editableSteps.filter(step => !step.skip);
+    if (stepsToRun.length === 0) {
+      setWorkflowError("No steps to execute (all steps skipped)");
+      return;
+    }
+
+    setShowWorkflowPreview(false);
+    setWorkflowRunLoading(true);
+    setWorkflowError(null);
+    setWorkflowRunResult(null);
+    
+    try {
+      const resp = await fetch(`${API_BASE}/execute-workflow`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          url, 
+          pageUrl: selectedWorkflow.pageUrl, 
+          steps: stepsToRun 
+        }),
+      });
+      const data = (await resp.json()) as WorkflowExecutionResult & { error?: string };
+      if (!resp.ok || data.error) {
+        throw new Error(data.error || `Execution failed (${resp.status})`);
+      }
+      setWorkflowRunResult(data);
+    } catch (err) {
+      const e = err as Error;
+      setWorkflowError(e.message || "Workflow execution failed");
+    } finally {
+      setWorkflowRunLoading(false);
+    }
+  };
+
+  const getWorkflowIcon = (type: string) => {
+    switch (type) {
+      case "checkout": return "🛒";
+      case "login": return "🔐";
+      case "registration": return "📝";
+      case "contact": return "✉️";
+      case "search": return "🔍";
+      case "newsletter": return "📧";
+      case "booking": return "📅";
+      default: return "⚡";
+    }
+  };
+
+  const getConfidenceBadge = (confidence: number, available: boolean) => {
+    if (!available) {
+      return <Badge variant="outline" className="bg-muted text-muted-foreground">Not Available</Badge>;
+    }
+    if (confidence >= 80) {
+      return <Badge className="bg-green-500/20 text-green-600 border-green-500/30">{confidence}% Confidence</Badge>;
+    }
+    if (confidence >= 50) {
+      return <Badge className="bg-yellow-500/20 text-yellow-600 border-yellow-500/30">{confidence}% Confidence</Badge>;
+    }
+    return <Badge className="bg-orange-500/20 text-orange-600 border-orange-500/30">{confidence}% Confidence</Badge>;
   };
 
   const toggleUrlSelection = (pageUrl: string) => {
@@ -498,6 +740,110 @@ export default function FlowGenerator() {
       setFormTesting(false);
       setFormTestingUrl(null);
     }
+  };
+
+  // Get form plan for preview/customization
+  const getFormPlan = async (page: FormPage) => {
+    setPlanLoading(true);
+    setPreviewFormPage(page);
+    setError(null);
+
+    try {
+      const resp = await fetch(`${API_BASE}/get-form-plan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: page.url }),
+      });
+
+      const data = (await resp.json()) as FormPlanResponse & { error?: string };
+      if (!resp.ok || data?.error) {
+        throw new Error(data?.error || `Failed to get form plan (${resp.status})`);
+      }
+
+      setPreviewPlan(data);
+      
+      // Convert AI plan to editable format
+      const editable: EditableFillAction[] = data.aiPlan.fillActions.map((action) => {
+        // Find the input type from formData
+        const inputInfo = data.formData.inputs.find((inp) => inp.selector === action.selector);
+        return {
+          selector: action.selector,
+          value: action.value,
+          description: action.description,
+          skip: false,
+          inputType: inputInfo?.type || "text",
+        };
+      });
+      setEditablePlan(editable);
+      setSkipSubmit(false);
+      setShowPlanPreview(true);
+    } catch (e: unknown) {
+      const err = e as Error;
+      setError(err?.message || "Failed to get form plan");
+    } finally {
+      setPlanLoading(false);
+    }
+  };
+
+  // Execute form test with customized plan
+  const executeCustomPlan = async () => {
+    if (!previewFormPage || !previewPlan) return;
+
+    setShowPlanPreview(false);
+    setFormTesting(true);
+    setFormTestingUrl(previewFormPage.url);
+
+    try {
+      // Build custom plan from editable state
+      const customPlan = {
+        fillActions: editablePlan
+          .filter((action) => !action.skip)
+          .map((action) => ({
+            selector: action.selector,
+            value: action.value,
+            description: action.description,
+          })),
+        submitSelector: previewPlan.aiPlan.submitSelector,
+        skipSubmit,
+      };
+
+      const resp = await fetch(`${API_BASE}/test-forms`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          formPages: [previewFormPage],
+          customPlan,
+        }),
+      });
+
+      const data = (await resp.json()) as FormTestSuite & { error?: string };
+      if (!resp.ok || data?.error) {
+        throw new Error(data?.error || `Test failed (${resp.status})`);
+      }
+
+      const merged = new Map(formTestResults);
+      [...data.passed, ...data.failed, ...data.inconclusive, ...data.errors].forEach((r) => {
+        merged.set(r.url, r);
+      });
+      setFormTestResults(merged);
+    } catch (e: unknown) {
+      const err = e as Error;
+      setError(err?.message || "Form testing failed");
+    } finally {
+      setFormTesting(false);
+      setFormTestingUrl(null);
+      setPreviewPlan(null);
+      setPreviewFormPage(null);
+    }
+  };
+
+  // Update a single field in the editable plan
+  const updatePlanField = (index: number, field: keyof EditableFillAction, value: string | boolean) => {
+    setEditablePlan((prev) =>
+      prev.map((action, i) =>
+        i === index ? { ...action, [field]: value } : action
+      )
+    );
   };
 
   const totalLinks = useMemo(() => {
@@ -743,6 +1089,7 @@ export default function FlowGenerator() {
                   <TabsTrigger value="performance">Performance</TabsTrigger>
                   <TabsTrigger value="responsive">Responsive</TabsTrigger>
                   <TabsTrigger value="links">Links</TabsTrigger>
+                <TabsTrigger value="workflows">Workflows</TabsTrigger>
                   <TabsTrigger value="forms">Form Testing</TabsTrigger>
                 </TabsList>
 
@@ -1120,6 +1467,300 @@ export default function FlowGenerator() {
                   )}
                 </TabsContent>
 
+                {/* Workflows - Intelligent Auto-Detection */}
+                <TabsContent value="workflows" className="space-y-4 pt-4">
+                  <div className="flex flex-wrap gap-3 items-center justify-between">
+                    <div className="space-y-1">
+                      <p className="text-sm text-muted-foreground">
+                        Automatically detect all available workflows on your website (checkout, login, registration, etc.)
+                      </p>
+                    </div>
+                    <Button 
+                      onClick={handleDiscoverWorkflows} 
+                      disabled={workflowLoading || !url} 
+                      className="gap-2"
+                      size="lg"
+                    >
+                      {workflowLoading ? (
+                        <>
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Analyzing...
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="h-4 w-4" />
+                          Detect All Workflows
+                        </>
+                      )}
+                    </Button>
+                  </div>
+
+                  {workflowError && (
+                    <div className="text-sm text-destructive bg-destructive/10 border border-destructive/30 p-3 rounded-lg">
+                      {workflowError}
+                    </div>
+                  )}
+
+                  {workflowLoading && (
+                    <Card className="border-dashed">
+                      <CardContent className="py-8">
+                        <div className="flex flex-col items-center gap-3 text-center">
+                          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                          <div>
+                            <p className="font-medium">Scanning website for workflows...</p>
+                            <p className="text-sm text-muted-foreground">Crawling pages and detecting available workflows using AI</p>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )}
+
+                  {/* Detected Workflows Grid */}
+                  {!workflowLoading && detectedWorkflows.length > 0 && (
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h3 className="font-medium">Detected Forms ({detectedWorkflows.length})</h3>
+                          <p className="text-xs text-muted-foreground">
+                            Found across {pagesScanned} page{pagesScanned !== 1 ? "s" : ""} • Select one to preview and execute
+                          </p>
+                        </div>
+                      </div>
+                      
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        {detectedWorkflows.map((workflow) => (
+                          <Card 
+                            key={workflow.id} 
+                            className="shadow-elegant transition-all hover:border-primary/50"
+                          >
+                            <CardHeader className="pb-3">
+                              <div className="flex items-start justify-between">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-2xl">{getWorkflowIcon(workflow.type)}</span>
+                                  <div>
+                                    <CardTitle className="text-lg">{workflow.name}</CardTitle>
+                                    {workflow.pageUrl && (
+                                      <CardDescription className="text-xs truncate max-w-[180px]" title={workflow.pageUrl}>
+                                        {workflow.pageTitle || new URL(workflow.pageUrl).pathname}
+                                      </CardDescription>
+                                    )}
+                                  </div>
+                                </div>
+                                <div className="flex flex-col items-end gap-1">
+                                  <Badge variant="secondary" className="text-[11px]">
+                                    {workflow.type.toUpperCase()}
+                                  </Badge>
+                                  {getConfidenceBadge(workflow.confidence, workflow.available)}
+                                </div>
+                              </div>
+                            </CardHeader>
+                            <CardContent className="space-y-3">
+                              {/* Show field names */}
+                              {workflow.fields && workflow.fields.length > 0 && (
+                                <div className="flex flex-wrap gap-1">
+                                  {workflow.fields.slice(0, 4).map((field, idx) => (
+                                    <Badge key={idx} variant="secondary" className="text-xs">
+                                      {field}
+                                    </Badge>
+                                  ))}
+                                  {workflow.fields.length > 4 && (
+                                    <Badge variant="secondary" className="text-xs">
+                                      +{workflow.fields.length - 4} more
+                                    </Badge>
+                                  )}
+                                </div>
+                              )}
+                              
+                              {/* Show step count */}
+                              {workflow.steps.length > 0 && (
+                                <p className="text-xs text-muted-foreground">
+                                  {workflow.steps.length} auto-generated steps
+                                </p>
+                              )}
+
+                              {workflow.steps.length > 0 ? (
+                                <div className="flex gap-2 pt-2">
+                                  <Button 
+                                    size="sm" 
+                                    variant="outline" 
+                                    className="flex-1 gap-1"
+                                    onClick={() => handlePreviewWorkflow(workflow)}
+                                  >
+                                    <Eye className="h-3 w-3" />
+                                    Edit
+                                  </Button>
+                                  <Button 
+                                    size="sm" 
+                                    className="flex-1 gap-1"
+                                    onClick={() => handleExecuteWorkflow(workflow)}
+                                    disabled={workflowRunLoading}
+                                  >
+                                    {workflowRunLoading && selectedWorkflow?.id === workflow.id ? (
+                                      <Loader2 className="h-3 w-3 animate-spin" />
+                                    ) : (
+                                      <Play className="h-3 w-3" />
+                                    )}
+                                    Execute
+                                  </Button>
+                                </div>
+                              ) : (
+                                <div className="pt-2">
+                                  <Badge variant="outline" className="w-full justify-center py-2 text-muted-foreground">
+                                    No steps generated
+                                  </Badge>
+                                </div>
+                              )}
+                            </CardContent>
+                          </Card>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Workflow Executing Indicator */}
+                  {workflowRunLoading && selectedWorkflow && (
+                    <Card className="border-primary/50 shadow-elegant animate-pulse">
+                      <CardContent className="py-6">
+                        <div className="flex items-center gap-4">
+                          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                          <div>
+                            <p className="font-medium">Executing {selectedWorkflow.name} Workflow...</p>
+                            <p className="text-sm text-muted-foreground">
+                              Running {selectedWorkflow.steps.length} steps on {selectedWorkflow.pageTitle || selectedWorkflow.pageUrl}
+                            </p>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )}
+
+                  {/* Execution Results */}
+                  {workflowRunResult && selectedWorkflow && !workflowRunLoading && (
+                    <Card className="shadow-elegant">
+                      <CardHeader>
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xl">{getWorkflowIcon(selectedWorkflow.type)}</span>
+                            <div>
+                              <CardTitle className="flex items-center gap-2">
+                                {selectedWorkflow.name} Results
+                                {workflowRunResult.status === "passed" ? (
+                                  <CheckCircle className="h-5 w-5 text-green-500" />
+                                ) : workflowRunResult.status === "inconclusive" ? (
+                                  <AlertCircle className="h-5 w-5 text-yellow-500" />
+                                ) : (
+                                  <XCircle className="h-5 w-5 text-red-500" />
+                                )}
+                              </CardTitle>
+                              <CardDescription>
+                                {workflowRunResult.status === "passed" 
+                                  ? "Workflow completed successfully" 
+                                  : workflowRunResult.status === "inconclusive"
+                                  ? "Could not determine outcome"
+                                  : "Workflow encountered errors"}
+                              </CardDescription>
+                            </div>
+                          </div>
+                          <Badge 
+                            variant={workflowRunResult.status === "passed" ? "outline" : workflowRunResult.status === "inconclusive" ? "secondary" : "destructive"}
+                            className={
+                              workflowRunResult.status === "passed" 
+                                ? "bg-green-500/10 text-green-600 border-green-500/30" 
+                                : workflowRunResult.status === "inconclusive"
+                                ? "bg-yellow-500/10 text-yellow-600 border-yellow-500/30"
+                                : ""
+                            }
+                          >
+                            {workflowRunResult.status.toUpperCase()}
+                          </Badge>
+                        </div>
+                      </CardHeader>
+                      <CardContent className="space-y-4">
+                        {/* AI Analysis Result */}
+                        {workflowRunResult.reason && (
+                          <div className={`p-3 rounded-lg ${
+                            workflowRunResult.status === "passed" 
+                              ? "bg-green-500/10 border border-green-500/20" 
+                              : workflowRunResult.status === "inconclusive"
+                              ? "bg-yellow-500/10 border border-yellow-500/20"
+                              : "bg-red-500/10 border border-red-500/20"
+                          }`}>
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-sm font-medium">Analysis:</span>
+                              {workflowRunResult.confidence !== undefined && (
+                                <Badge variant="outline" className="text-xs">
+                                  {Math.round((workflowRunResult.confidence || 0) * 100)}% confident
+                                </Badge>
+                              )}
+                            </div>
+                            <p className="text-sm text-muted-foreground">{workflowRunResult.reason}</p>
+                          </div>
+                        )}
+
+                        
+
+                        {/* Steps Executed */}
+                        {workflowRunResult.steps && workflowRunResult.steps.length > 0 && (
+                          <div className="space-y-2">
+                            <p className="text-xs font-medium text-muted-foreground">Steps Executed:</p>
+                            {workflowRunResult.steps.map((step, idx) => (
+                              <div 
+                                key={`result-${idx}`} 
+                                className={`border rounded-lg p-3 flex items-center justify-between ${
+                                  step.status === "success" ? "bg-green-500/5 border-green-500/20" : 
+                                  step.status === "error" ? "bg-red-500/5 border-red-500/20" : ""
+                                }`}
+                              >
+                                <div className="space-y-1 min-w-0 flex-1">
+                                  <div className="flex items-center gap-2">
+                                    <Badge variant="outline" className="shrink-0">Step {idx + 1}</Badge>
+                                    <span className="font-medium truncate">{step.description || step.action}</span>
+                                  </div>
+                                  {step.error && (
+                                    <p className="text-xs text-destructive">{step.error}</p>
+                                  )}
+                                </div>
+                                {step.status === "success" ? (
+                                  <CheckCircle className="h-4 w-4 text-green-500 shrink-0 ml-2" />
+                                ) : step.status === "error" ? (
+                                  <XCircle className="h-4 w-4 text-red-500 shrink-0 ml-2" />
+                                ) : (
+                                  <Badge variant="outline" className="shrink-0 ml-2">Pending</Badge>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {workflowRunResult.error && (
+                          <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-lg">
+                            <strong>Error:</strong> {workflowRunResult.error}
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+                  )}
+
+                  {!workflowLoading && detectedWorkflows.length === 0 && (
+                    <Card className="border-dashed">
+                      <CardContent className="py-12">
+                        <div className="flex flex-col items-center gap-4 text-center">
+                          <div className="h-16 w-16 rounded-full bg-muted flex items-center justify-center">
+                            <Sparkles className="h-8 w-8 text-muted-foreground" />
+                          </div>
+                          <div>
+                            <h3 className="font-semibold text-lg">Intelligent Workflow Detection</h3>
+                            <p className="text-muted-foreground max-w-md mt-1">
+                              Click "Detect All Workflows" to automatically discover available user flows on your website 
+                              (checkout, login, registration, contact forms, and more).
+                            </p>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )}
+                </TabsContent>
+
                 {/* Forms */}
                 <TabsContent value="forms" className="space-y-4 pt-4">
                   <div className="flex flex-wrap gap-3 items-center justify-between">
@@ -1160,26 +1801,51 @@ export default function FlowGenerator() {
                                     <span>Inputs: <span className="font-medium text-foreground">{page.inputs}</span></span>
                                     <span>Buttons: <span className="font-medium text-foreground">{page.buttons}</span></span>
                                   </div>
+                                  {result?.dedupCount && result.dedupCount > 1 && (
+                                    <div className="mt-2">
+                                      <Badge variant="outline" className="text-[11px]">
+                                        Found on {result.dedupCount} pages (deduped)
+                                      </Badge>
+                                    </div>
+                                  )}
                                 </div>
                                 <div className="flex flex-col items-end gap-2">
                                   {getFormStatusBadge(result?.status)}
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    className="gap-2"
-                                    disabled={formTesting}
-                                    onClick={() => testForms([page])}
-                                  >
-                                    {formTesting && formTestingUrl === page.url ? (
-                                      <>
-                                        <Loader2 className="h-4 w-4 animate-spin" />Testing...
-                                      </>
-                                    ) : (
-                                      <>
-                                        <PlayCircle className="h-4 w-4" />Test Form
-                                      </>
-                                    )}
-                                  </Button>
+                                  <div className="flex gap-2">
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="gap-2"
+                                      disabled={formTesting || planLoading}
+                                      onClick={() => getFormPlan(page)}
+                                    >
+                                      {planLoading && previewFormPage?.url === page.url ? (
+                                        <>
+                                          <Loader2 className="h-4 w-4 animate-spin" />Loading...
+                                        </>
+                                      ) : (
+                                        <>
+                                          <Eye className="h-4 w-4" />Preview
+                                        </>
+                                      )}
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      className="gap-2"
+                                      disabled={formTesting || planLoading}
+                                      onClick={() => testForms([page])}
+                                    >
+                                      {formTesting && formTestingUrl === page.url ? (
+                                        <>
+                                          <Loader2 className="h-4 w-4 animate-spin" />Testing...
+                                        </>
+                                      ) : (
+                                        <>
+                                          <PlayCircle className="h-4 w-4" />Run Test
+                                        </>
+                                      )}
+                                    </Button>
+                                  </div>
                                 </div>
                               </div>
                               {result?.aiAnalysis && (
@@ -1188,14 +1854,7 @@ export default function FlowGenerator() {
                                     AI Verdict: {result.aiAnalysis.status}
                                   </div>
                                   <p className="text-muted-foreground">{result.aiAnalysis.reason}</p>
-                                  {result.aiAnalysis.detectedMessages?.length > 0 && (
-                                    <div className="text-xs text-muted-foreground space-y-1">
-                                      <p className="font-medium text-foreground">Detected Messages:</p>
-                                      {result.aiAnalysis.detectedMessages.map((msg, i) => (
-                                        <div key={msg + i} className="p-2 rounded bg-muted/50">{msg}</div>
-                                      ))}
-                                    </div>
-                                  )}
+                                  
                                 </div>
                               )}
                               {result?.error && (
@@ -1233,6 +1892,270 @@ export default function FlowGenerator() {
           )
         )}
       </div>
+
+      {/* Form Plan Preview Dialog */}
+      <Dialog open={showPlanPreview} onOpenChange={setShowPlanPreview}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Settings2 className="h-5 w-5" />
+              Form Test Plan Preview
+            </DialogTitle>
+            <DialogDescription>
+              {previewPlan?.url && (
+                <span className="text-xs break-all">{previewPlan.url}</span>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+
+          {previewPlan && (
+            <div className="space-y-4">
+              {/* Steps */}
+              <div className="space-y-3">
+                <h4 className="font-medium text-sm text-muted-foreground">
+                  Fill Steps ({editablePlan.filter(a => !a.skip).length} of {editablePlan.length} active)
+                </h4>
+                {editablePlan.map((action, index) => (
+                  <div
+                    key={action.selector}
+                    className={`border rounded-lg p-3 space-y-2 ${action.skip ? "opacity-50 bg-muted/30" : ""}`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline" className="text-xs">
+                          Step {index + 1}
+                        </Badge>
+                        <span className="font-medium text-sm">{action.description}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Label htmlFor={`skip-${index}`} className="text-xs text-muted-foreground">
+                          Skip
+                        </Label>
+                        <Checkbox
+                          id={`skip-${index}`}
+                          checked={action.skip}
+                          onCheckedChange={(checked) => updatePlanField(index, "skip", !!checked)}
+                        />
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge variant="secondary" className="text-xs shrink-0">
+                        {action.inputType}
+                      </Badge>
+                      {action.inputType === "checkbox" || action.inputType === "radio" ? (
+                        <div className="flex items-center gap-2">
+                          <Checkbox
+                            checked={action.value === "true"}
+                            disabled={action.skip}
+                            onCheckedChange={(checked) => updatePlanField(index, "value", checked ? "true" : "false")}
+                          />
+                          <Label className="text-sm">Check this field</Label>
+                        </div>
+                      ) : action.inputType === "textarea" ? (
+                        <Textarea
+                          value={action.value}
+                          disabled={action.skip}
+                          onChange={(e) => updatePlanField(index, "value", e.target.value)}
+                          className="text-sm"
+                          rows={2}
+                        />
+                      ) : (
+                        <Input
+                          value={action.value}
+                          disabled={action.skip}
+                          onChange={(e) => updatePlanField(index, "value", e.target.value)}
+                          className="text-sm"
+                        />
+                      )}
+                    </div>
+                    <div className="text-xs text-muted-foreground font-mono truncate">
+                      {action.selector}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Submit Toggle */}
+              <div className="border rounded-lg p-3">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-1">
+                    <Label className="font-medium">Click Submit Button</Label>
+                    <p className="text-xs text-muted-foreground">
+                      {previewPlan.aiPlan.submitDescription || previewPlan.aiPlan.submitSelector}
+                    </p>
+                  </div>
+                  <Switch
+                    checked={!skipSubmit}
+                    onCheckedChange={(checked) => setSkipSubmit(!checked)}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="outline" onClick={() => setShowPlanPreview(false)}>
+              Cancel
+            </Button>
+            <Button onClick={executeCustomPlan} className="gap-2">
+              <PlayCircle className="h-4 w-4" />
+              Execute Test
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Workflow Edit/Preview Dialog */}
+      <Dialog open={showWorkflowPreview} onOpenChange={setShowWorkflowPreview}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <span className="text-xl">{selectedWorkflow && getWorkflowIcon(selectedWorkflow.type)}</span>
+              Edit {selectedWorkflow?.name} Workflow
+            </DialogTitle>
+            <DialogDescription>
+              Review and customize the workflow steps before execution
+            </DialogDescription>
+          </DialogHeader>
+
+          {selectedWorkflow && (
+            <div className="space-y-4">
+              {/* Workflow Info */}
+              <div className="p-3 bg-muted/50 rounded-lg space-y-2">
+                <div className="flex items-center gap-3">
+                  {getConfidenceBadge(selectedWorkflow.confidence, selectedWorkflow.available)}
+                  <span className="text-sm text-muted-foreground">{selectedWorkflow.reason}</span>
+                </div>
+                {selectedWorkflow.pageUrl && (
+                  <div className="text-xs">
+                    <span className="text-muted-foreground">Page: </span>
+                    <a 
+                      href={selectedWorkflow.pageUrl} 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="text-primary hover:underline font-medium"
+                    >
+                      {selectedWorkflow.pageTitle || selectedWorkflow.pageUrl}
+                    </a>
+                  </div>
+                )}
+              </div>
+
+              {/* Editable Steps */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-medium text-sm flex items-center gap-2">
+                    <ListChecks className="h-4 w-4" />
+                    Workflow Steps ({editableSteps.filter(s => !s.skip).length} of {editableSteps.length} active)
+                  </h4>
+                </div>
+                
+                {editableSteps.length > 0 ? (
+                  <div className="space-y-3">
+                    {editableSteps.map((step, idx) => (
+                      <div
+                        key={`edit-step-${idx}`}
+                        className={`border rounded-lg p-4 space-y-3 transition-opacity ${step.skip ? "opacity-50 bg-muted/30" : ""}`}
+                      >
+                        {/* Step Header */}
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Badge variant="outline" className="text-xs">
+                              Step {idx + 1}
+                            </Badge>
+                            <Badge variant="secondary" className="text-xs">
+                              {step.action}
+                            </Badge>
+                            <span className="text-sm font-medium">{step.description}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Label htmlFor={`skip-step-${idx}`} className="text-xs text-muted-foreground">
+                              Skip
+                            </Label>
+                            <Checkbox
+                              id={`skip-step-${idx}`}
+                              checked={step.skip || false}
+                              onCheckedChange={(checked) => updateEditableStep(idx, "skip", !!checked)}
+                            />
+                          </div>
+                        </div>
+
+                        {/* Click/Navigate: Just show target (read-only) */}
+                        {(step.action === "click" || step.action === "navigate") && step.selector && (
+                          <div className="text-xs text-muted-foreground font-mono bg-muted/50 p-2 rounded">
+                            Target: {step.selector}
+                          </div>
+                        )}
+
+                        {/* Fill/Select: Show editable value field */}
+                        {(step.action === "fill" || step.action === "select") && (
+                          <div className="space-y-2">
+                            {step.selector && (
+                              <div className="text-xs text-muted-foreground font-mono bg-muted/50 p-2 rounded">
+                                Field: {step.selector}
+                              </div>
+                            )}
+                            <div className="space-y-1">
+                              <Label className="text-xs text-muted-foreground">Value to Enter</Label>
+                              {step.selector?.includes("message") || step.selector?.includes("textarea") ? (
+                                <Textarea
+                                  value={step.value || ""}
+                                  onChange={(e) => updateEditableStep(idx, "value", e.target.value)}
+                                  disabled={step.skip}
+                                  className="text-sm"
+                                  rows={3}
+                                  placeholder="Enter value..."
+                                />
+                              ) : (
+                                <Input
+                                  value={step.value || ""}
+                                  onChange={(e) => updateEditableStep(idx, "value", e.target.value)}
+                                  disabled={step.skip}
+                                  className="text-sm"
+                                  placeholder="Enter value..."
+                                />
+                              )}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Assert: Show text to verify (read-only) */}
+                        {step.action === "assert" && step.value && (
+                          <div className="text-xs text-muted-foreground">
+                            Verify text: <span className="font-medium">"{step.value}"</span>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-sm text-muted-foreground text-center py-4">
+                    No steps generated for this workflow.
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="outline" onClick={() => setShowWorkflowPreview(false)}>
+              Cancel
+            </Button>
+            <Button 
+              onClick={handleExecuteEditedWorkflow}
+              className="gap-2"
+              disabled={!selectedWorkflow || editableSteps.filter(s => !s.skip).length === 0 || workflowRunLoading}
+            >
+              {workflowRunLoading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Play className="h-4 w-4" />
+              )}
+              Execute Workflow
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </DashboardLayout>
   );
 }

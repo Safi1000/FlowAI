@@ -2,6 +2,9 @@ const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.1-8b-instant";
 const GROQ_API_URL = process.env.GROQ_API_URL || "https://api.groq.com/openai/v1/chat/completions";
 
+// Simple in-memory cache for form classification results
+const formClassificationCache = new Map();
+
 function buildMessages(prompt, data = null) {
   if (!data) return [{ role: "user", content: prompt }];
   let serialized = "";
@@ -88,6 +91,116 @@ export async function callGroqModel(model, prompt, data = null) {
     return text;
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+/**
+ * Classify a form's intent using AI.
+ * Returns "transactional" for forms like contact, signup, login, checkout, etc.
+ * Returns "search_or_filter" for search bars, filters, sorting controls.
+ * Returns "unknown" if uncertain (treated as transactional to avoid false negatives).
+ *
+ * @param {object} formMeta - Form metadata from crawler (inputs, buttons, text, action, method)
+ * @returns {Promise<string>} - "transactional" | "search_or_filter" | "unknown"
+ */
+export async function classifyFormIntent(formMeta) {
+  // Build a cache key from form metadata
+  const cacheKey = JSON.stringify({
+    inputs: (formMeta.inputs || []).map((i) => ({
+      type: i.type,
+      name: i.name,
+      placeholder: i.placeholder,
+      label: i.label,
+    })),
+    buttons: (formMeta.buttons || []).map((b) => ({ text: b.text, type: b.type })),
+    text: (formMeta.text || "").slice(0, 200),
+  });
+
+  if (formClassificationCache.has(cacheKey)) {
+    return formClassificationCache.get(cacheKey);
+  }
+
+  // If no API key, default to keeping forms (transactional)
+  if (!GROQ_API_KEY) {
+    console.log("[FlowAI] No GROQ_API_KEY, defaulting form to transactional");
+    return "transactional";
+  }
+
+  // Build concise prompt
+  const inputSummary = (formMeta.inputs || [])
+    .slice(0, 10)
+    .map((i) => {
+      const parts = [i.type || "text"];
+      if (i.name) parts.push(`name="${i.name}"`);
+      if (i.placeholder) parts.push(`placeholder="${i.placeholder}"`);
+      if (i.label) parts.push(`label="${i.label}"`);
+      return parts.join(" ");
+    })
+    .join("; ");
+
+  const buttonSummary = (formMeta.buttons || [])
+    .slice(0, 5)
+    .map((b) => b.text || b.type || "button")
+    .join(", ");
+
+  const textSnippet = (formMeta.text || "").slice(0, 300);
+
+  const prompt = `You are classifying an HTML form's purpose.
+
+Form inputs: ${inputSummary || "none"}
+Buttons: ${buttonSummary || "none"}
+Surrounding text snippet: ${textSnippet || "none"}
+
+Classify this form into ONE category:
+- "transactional" — Contact forms, signup, login, checkout, newsletter subscribe, feedback, registration, booking, order, apply, etc.
+- "search_or_filter" — Site search bars, product filters, date pickers used purely for filtering, sorting controls.
+
+Reply with ONLY one word: transactional OR search_or_filter`;
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+
+    const res = await fetch(GROQ_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${GROQ_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: GROQ_MODEL,
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0,
+        max_tokens: 20,
+      }),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
+
+    if (!res.ok) {
+      console.log(`[FlowAI] Form classification API error ${res.status}, defaulting to transactional`);
+      return "transactional";
+    }
+
+    const json = await res.json();
+    const raw = (json?.choices?.[0]?.message?.content || "").toLowerCase().trim();
+
+    let result = "transactional";
+    if (raw.includes("search_or_filter") || raw === "search" || raw === "filter") {
+      result = "search_or_filter";
+    } else if (raw.includes("transactional")) {
+      result = "transactional";
+    } else {
+      // Unknown response, keep the form
+      result = "transactional";
+    }
+
+    formClassificationCache.set(cacheKey, result);
+    return result;
+  } catch (err) {
+    console.log(`[FlowAI] Form classification error: ${err?.message}, defaulting to transactional`);
+    return "transactional";
   }
 }
 
