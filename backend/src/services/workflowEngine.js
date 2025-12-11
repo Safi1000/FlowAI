@@ -2089,7 +2089,6 @@ export async function executeWorkflow({ url, pageUrl, steps = [] }) {
         status: "failed",
         confidence: 1.0,
         reason: finalError || "A workflow step failed to execute",
-        detectedMessages: [finalError],
       };
     } else {
       // All steps executed - now analyze the actual result
@@ -2125,8 +2124,6 @@ export async function executeWorkflow({ url, pageUrl, steps = [] }) {
       status: "failed",
       confidence: 1.0,
       reason: finalError,
-      // detectedMessages removed
-      // detectedMessages removed
     };
   } finally {
     if (browser) {
